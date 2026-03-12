@@ -8,7 +8,9 @@ export interface Filters {
 
 export interface ChatMessage {
   id: string;
-  text: string;
+  type?: 'text' | 'image' | 'voice';
+  text?: string;
+  mediaUrl?: string;
   timestamp: number;
   fromPartner: boolean;
 }

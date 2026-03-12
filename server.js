@@ -14,6 +14,7 @@ const io = new Server(httpServer, {
     origin: '*',
     methods: ['GET', 'POST'],
   },
+  maxHttpBufferSize: 5e6, // 5 MB
 });
 
 // Serve static files in production
@@ -100,7 +101,9 @@ io.on('connection', (socket) => {
       const partnerSocket = io.sockets.sockets.get(partnerId);
       if (partnerSocket) {
         partnerSocket.emit('message', {
+          type: data.type || 'text',
           text: data.text,
+          mediaUrl: data.mediaUrl,
           timestamp: Date.now(),
           fromPartner: true,
         });

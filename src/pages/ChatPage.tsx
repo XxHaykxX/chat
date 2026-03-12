@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, LogOut, UserPlus, AlertTriangle } from 'lucide-react';
+import { Send, LogOut, UserPlus, AlertTriangle, Paperclip, Mic } from 'lucide-react';
 import type { ChatMessage } from '../types';
 import styles from './ChatPage.module.css';
 
@@ -7,7 +7,7 @@ interface ChatPageProps {
   messages: ChatMessage[];
   isPartnerTyping: boolean;
   partnerDisconnected: boolean;
-  onSendMessage: (text: string) => void;
+  onSendMessage: (text?: string, type?: 'text' | 'image' | 'voice', mediaUrl?: string) => void;
   onTyping: () => void;
   onStopTyping: () => void;
   onDisconnect: () => void;
@@ -25,8 +25,12 @@ export default function ChatPage({
   onNewSearch,
 }: ChatPageProps) {
   const [inputValue, setInputValue] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -47,7 +51,7 @@ export default function ChatPage({
 
   const handleSend = useCallback(() => {
     if (!inputValue.trim()) return;
-    onSendMessage(inputValue.trim());
+    onSendMessage(inputValue.trim(), 'text');
     setInputValue('');
     onStopTyping();
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
@@ -62,6 +66,68 @@ export default function ChatPage({
     },
     [handleSend]
   );
+  
+  const handleAttachClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Файл слишком большой (макс 5MB)');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onloadend = () => {
+      const base64Image = reader.result as string;
+      onSendMessage(undefined, 'image', base64Image);
+    };
+
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = () => {
+          const base64Audio = reader.result as string;
+          onSendMessage(undefined, 'voice', base64Audio);
+        };
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Error accessing mic', err);
+      alert('Не удалось получить доступ к микрофону.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
 
   return (
     <div className={styles.page}>
@@ -102,7 +168,13 @@ export default function ChatPage({
             key={msg.id}
             className={`${styles.bubble} ${msg.fromPartner ? styles.partner : styles.mine}`}
           >
-            <p>{msg.text}</p>
+            {msg.type === 'text' && <p>{msg.text}</p>}
+            {msg.type === 'image' && msg.mediaUrl && (
+              <img src={msg.mediaUrl} alt="Attached" className={styles.attachedImage} />
+            )}
+            {msg.type === 'voice' && msg.mediaUrl && (
+              <audio controls src={msg.mediaUrl} className={styles.attachedAudio} />
+            )}
             <span className={styles.time}>
               {new Date(msg.timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
             </span>
@@ -130,24 +202,53 @@ export default function ChatPage({
       </main>
 
       <footer className={styles.inputBar}>
+        <button
+          className={styles.attachBtn}
+          onClick={handleAttachClick}
+          disabled={partnerDisconnected}
+          aria-label="Прикрепить фото"
+          title="Прикрепить фото"
+        >
+          <Paperclip size={18} />
+        </button>
+        <input
+          type="file"
+          accept="image/*"
+          ref={fileInputRef}
+          style={{ display: 'none' }}
+          onChange={handleFileChange}
+        />
         <input
           type="text"
           value={inputValue}
           onChange={handleInputChange}
           onKeyDown={handleKeyDown}
-          placeholder="Введите сообщение..."
+          placeholder={isRecording ? 'Идет запись...' : 'Введите сообщение...'}
           className={styles.input}
-          disabled={partnerDisconnected}
+          disabled={partnerDisconnected || isRecording}
           aria-label="Сообщение"
         />
-        <button
-          className={styles.sendBtn}
-          onClick={handleSend}
-          disabled={!inputValue.trim() || partnerDisconnected}
-          aria-label="Отправить"
-        >
-          <Send size={18} />
-        </button>
+        {inputValue.trim() ? (
+          <button
+            className={styles.sendBtn}
+            onClick={handleSend}
+            disabled={partnerDisconnected}
+            aria-label="Отправить"
+          >
+            <Send size={18} />
+          </button>
+        ) : (
+          <button
+            className={`${styles.micBtn} ${isRecording ? styles.recording : ''}`}
+            onPointerDown={startRecording}
+            onPointerUp={stopRecording}
+            onPointerLeave={stopRecording}
+            disabled={partnerDisconnected}
+            aria-label="Записать голосовое"
+          >
+            <Mic size={18} />
+          </button>
+        )}
       </footer>
     </div>
   );

@@ -25,10 +25,17 @@ export function useSocket() {
       setMessages([]);
     });
 
-    socket.on('message', (data: { text: string; timestamp: number; fromPartner: boolean }) => {
+    socket.on('message', (data: { type?: 'text' | 'image' | 'voice'; text?: string; mediaUrl?: string; timestamp: number; fromPartner: boolean }) => {
       setMessages((prev) => [
         ...prev,
-        { id: crypto.randomUUID(), text: data.text, timestamp: data.timestamp, fromPartner: true },
+        {
+          id: crypto.randomUUID(),
+          type: data.type || 'text',
+          text: data.text,
+          mediaUrl: data.mediaUrl,
+          timestamp: data.timestamp,
+          fromPartner: true,
+        },
       ]);
     });
 
@@ -57,12 +64,19 @@ export function useSocket() {
     socketRef.current?.emit('stop-search');
   }, []);
 
-  const sendMessage = useCallback((text: string) => {
-    if (!text.trim()) return;
-    socketRef.current?.emit('message', { text });
+  const sendMessage = useCallback((text?: string, type: 'text' | 'image' | 'voice' = 'text', mediaUrl?: string) => {
+    if (type === 'text' && (!text || !text.trim())) return;
+    socketRef.current?.emit('message', { type, text, mediaUrl });
     setMessages((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), text, timestamp: Date.now(), fromPartner: false },
+      {
+        id: crypto.randomUUID(),
+        type,
+        text,
+        mediaUrl,
+        timestamp: Date.now(),
+        fromPartner: false,
+      },
     ]);
   }, []);
 
