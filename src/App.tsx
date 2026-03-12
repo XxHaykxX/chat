@@ -60,11 +60,15 @@ export default function App() {
           ) : (
             <ChatPage
               messages={socket.messages}
+              setMessages={socket.setMessages}
               isPartnerTyping={socket.isPartnerTyping}
+              isPartnerRecording={socket.isPartnerRecording}
               partnerDisconnected={socket.partnerDisconnected}
               onSendMessage={socket.sendMessage}
               onTyping={socket.sendTyping}
               onStopTyping={socket.sendStopTyping}
+              onRecording={socket.sendRecording}
+              onStopRecording={socket.sendStopRecording}
               onDisconnect={handleDisconnectChat}
               onNewSearch={handleNewSearch}
             />

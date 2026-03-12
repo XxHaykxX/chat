@@ -69,6 +69,8 @@ interface ChatPageProps {
   onSendMessage: (text?: string, type?: 'text' | 'image' | 'voice' | 'video', mediaUrl?: string) => void;
   onTyping: () => void;
   onStopTyping: () => void;
+  onRecording: () => void;
+  onStopRecording: () => void;
   onDisconnect: () => void;
   onNewSearch: () => void;
 }
@@ -82,16 +84,33 @@ export default function ChatPage({
   onSendMessage,
   onTyping,
   onStopTyping,
+  onRecording,
+  onStopRecording,
   onDisconnect,
   onNewSearch,
 }: ChatPageProps) {
   const [inputValue, setInputValue] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
-  const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; messageId: string | null; textItem: string | null }>({ visible: false, x: 0, y: 0, messageId: null, textItem: null });
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    messageId: string | null;
+    messageText: string | null;
+  }>({ visible: false, x: 0, y: 0, messageId: null, messageText: null });
+
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const isRecordingRef = useRef(false);
-  
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // --- Recording timer effect ---
   useEffect(() => {
     if (isRecording) {
       document.body.style.userSelect = 'none';
@@ -112,37 +131,33 @@ export default function ChatPage({
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [isRecording]);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // --- Auto-scroll ---
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isPartnerTyping, isPartnerRecording]);
 
+  // --- Context menu dismiss ---
   useEffect(() => {
-    const handleGlobalClick = () => {
-      if (contextMenu.visible) setContextMenu((prev) => ({ ...prev, visible: false }));
-    };
-    const handleGlobalScroll = () => {
-      if (contextMenu.visible) setContextMenu((prev) => ({ ...prev, visible: false }));
-    };
-    window.addEventListener('click', handleGlobalClick);
-    window.addEventListener('scroll', handleGlobalScroll, true);
+    if (!contextMenu.visible) return;
+    const dismiss = () => setContextMenu((prev) => ({ ...prev, visible: false }));
+    // Delay listener so the opening click doesn't immediately dismiss
+    const timer = setTimeout(() => {
+      window.addEventListener('pointerdown', dismiss);
+      window.addEventListener('scroll', dismiss, true);
+    }, 50);
     return () => {
-      window.removeEventListener('click', handleGlobalClick);
-      window.removeEventListener('scroll', handleGlobalScroll, true);
+      clearTimeout(timer);
+      window.removeEventListener('pointerdown', dismiss);
+      window.removeEventListener('scroll', dismiss, true);
     };
   }, [contextMenu.visible]);
 
+  // --- Input handlers ---
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       setInputValue(e.target.value);
       onTyping();
-
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => {
         onStopTyping();
@@ -168,7 +183,8 @@ export default function ChatPage({
     },
     [handleSend]
   );
-  
+
+  // --- File attachment ---
   const handleAttachClick = () => {
     fileInputRef.current?.click();
   };
@@ -176,12 +192,10 @@ export default function ChatPage({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     if (file.size > 5 * 1024 * 1024) {
       alert('Файл слишком большой (макс 5MB)');
       return;
     }
-
     const isVideo = file.type.startsWith('video/');
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -189,16 +203,26 @@ export default function ChatPage({
       const base64Data = reader.result as string;
       onSendMessage(undefined, isVideo ? 'video' : 'image', base64Data);
     };
-
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  // --- Voice recording ---
   const startRecording = async () => {
     if (isRecordingRef.current || partnerDisconnected) return;
     try {
       isRecordingRef.current = true;
       setIsRecording(true);
+      onRecording(); // Notify partner
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      // If user released BEFORE mic was granted, abort immediately
+      if (!isRecordingRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
@@ -210,42 +234,56 @@ export default function ChatPage({
       };
 
       mediaRecorder.onstop = () => {
-        // Use the actual mimeType recorded by the browser (crucial for iOS Safari which might use mp4)
         const mimeType = mediaRecorder.mimeType || 'audio/webm';
         const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-        const reader = new FileReader();
-        reader.readAsDataURL(audioBlob);
-        reader.onloadend = () => {
-          const base64Audio = reader.result as string;
-          onSendMessage(undefined, 'voice', base64Audio);
-        };
+        if (audioBlob.size > 0) {
+          const fileReader = new FileReader();
+          fileReader.readAsDataURL(audioBlob);
+          fileReader.onloadend = () => {
+            const base64Audio = fileReader.result as string;
+            onSendMessage(undefined, 'voice', base64Audio);
+          };
+        }
         stream.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
       };
 
       mediaRecorder.start();
-      setIsRecording(true);
     } catch (err) {
       console.error('Error accessing mic', err);
+      isRecordingRef.current = false;
+      setIsRecording(false);
+      onStopRecording();
       alert('Не удалось получить доступ к микрофону.');
     }
   };
 
-  const stopRecording = () => {
+  const stopRecording = useCallback(() => {
     if (!isRecordingRef.current) return;
     isRecordingRef.current = false;
     setIsRecording(false);
+    onStopRecording(); // Notify partner
+
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
+    } else {
+      // Mic permission was still pending — just kill the stream
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
     }
-  };
+    mediaRecorderRef.current = null;
+  }, [onStopRecording]);
 
+  // --- Context Menu ---
   const openContextMenu = (msg: ChatMessage, clientX: number, clientY: number) => {
     setContextMenu({
       visible: true,
       x: clientX,
       y: clientY,
       messageId: msg.id,
-      textItem: msg.text || null,
+      messageText: msg.text || null,
     });
   };
 
@@ -254,7 +292,7 @@ export default function ChatPage({
     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
     longPressTimerRef.current = setTimeout(() => {
       openContextMenu(msg, touch.clientX, touch.clientY);
-    }, 500); 
+    }, 500);
   };
 
   const handleMessageTouchEnd = () => {
@@ -262,8 +300,8 @@ export default function ChatPage({
   };
 
   const handleCopy = () => {
-    if (contextMenu.textItem) {
-      navigator.clipboard.writeText(contextMenu.textItem);
+    if (contextMenu.messageText) {
+      navigator.clipboard.writeText(contextMenu.messageText).catch(() => {});
     }
     setContextMenu((prev) => ({ ...prev, visible: false }));
   };
@@ -275,24 +313,44 @@ export default function ChatPage({
     setContextMenu((prev) => ({ ...prev, visible: false }));
   };
 
+  // --- Mic button event handlers (unified touch + pointer) ---
+  const handleMicPointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    startRecording();
+  }, [partnerDisconnected]);
+
+  const handleMicPointerUp = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    stopRecording();
+  }, [stopRecording]);
+
   return (
     <div className={styles.page}>
+      {/* Telegram-style Context Menu */}
       {contextMenu.visible && (
-        <div 
-          className={styles.contextMenuOverlay} 
-          style={{ top: contextMenu.y, left: Math.min(contextMenu.x, window.innerWidth - 150) }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {contextMenu.textItem && (
-            <button className={styles.contextMenuItem} onClick={handleCopy}>
-              <Copy size={16} /> Скопировать
+        <div className={styles.contextMenuBackdrop} onClick={() => setContextMenu((prev) => ({ ...prev, visible: false }))}>
+          <div
+            className={styles.contextMenuCard}
+            style={{
+              top: Math.min(contextMenu.y, window.innerHeight - 200),
+              left: Math.min(Math.max(contextMenu.x - 75, 12), window.innerWidth - 170),
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {contextMenu.messageText && (
+              <button className={styles.contextMenuItem} onClick={handleCopy}>
+                <Copy size={18} />
+                <span>Скопировать</span>
+              </button>
+            )}
+            <button className={`${styles.contextMenuItem} ${styles.contextMenuDanger}`} onClick={handleDelete}>
+              <Trash2 size={18} />
+              <span>Удалить</span>
             </button>
-          )}
-          <button className={`${styles.contextMenuItem} ${styles.contextMenuDanger}`} onClick={handleDelete}>
-            <Trash2 size={16} /> Удалить
-          </button>
+          </div>
         </div>
       )}
+
       <header className={styles.header}>
         <div className={styles.headerLeft}>
           <div className={styles.avatar}>А</div>
@@ -389,8 +447,8 @@ export default function ChatPage({
               className={styles.attachBtn}
               onClick={handleAttachClick}
               disabled={partnerDisconnected}
-              aria-label="Прикрепить фото"
-              title="Прикрепить фото"
+              aria-label="Прикрепить файл"
+              title="Прикрепить фото/видео"
             >
               <Paperclip size={18} />
             </button>
@@ -426,14 +484,8 @@ export default function ChatPage({
         ) : (
           <button
             className={`${styles.micBtn} ${isRecording ? styles.recording : ''}`}
-            onPointerDown={(e) => {
-              e.preventDefault();
-              startRecording();
-            }}
-            onPointerUp={(e) => {
-              e.preventDefault();
-              stopRecording();
-            }}
+            onPointerDown={handleMicPointerDown}
+            onPointerUp={handleMicPointerUp}
             onPointerLeave={stopRecording}
             onPointerCancel={stopRecording}
             onContextMenu={(e) => e.preventDefault()}
