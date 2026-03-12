@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/types.ts","./src/vite-env.d.ts","./src/hooks/usesocket.ts","./src/hooks/usetheme.ts","./src/pages/bugreportpage.tsx","./src/pages/chatpage.tsx","./src/pages/filterpage.tsx","./src/pages/helppage.tsx","./src/pages/rulespage.tsx","./src/pages/searchingpage.tsx"],"version":"5.9.3"}
