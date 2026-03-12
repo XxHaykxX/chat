@@ -120,10 +120,25 @@ io.on('connection', (socket) => {
   });
 
   socket.on('stop-typing', () => {
-    const partnerId = socket.data.partnerId;
     if (partnerId) {
       const partnerSocket = io.sockets.sockets.get(partnerId);
       if (partnerSocket) partnerSocket.emit('stop-typing');
+    }
+  });
+
+  socket.on('recording', () => {
+    const partnerId = socket.data.partnerId;
+    if (partnerId) {
+      const partnerSocket = io.sockets.sockets.get(partnerId);
+      if (partnerSocket) partnerSocket.emit('recording');
+    }
+  });
+
+  socket.on('stop-recording', () => {
+    const partnerId = socket.data.partnerId;
+    if (partnerId) {
+      const partnerSocket = io.sockets.sockets.get(partnerId);
+      if (partnerSocket) partnerSocket.emit('stop-recording');
     }
   });
 

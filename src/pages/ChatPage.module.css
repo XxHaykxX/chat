@@ -11,7 +11,10 @@
   justify-content: space-between;
   padding: 12px 20px;
   border-bottom: 1px solid var(--border-color);
-  background: var(--bg-secondary);
+  background: var(--bg-surface);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  z-index: 10;
 }
 
 .headerLeft {
@@ -75,7 +78,8 @@
 
 .messages {
   flex: 1;
-  overflow-y: auto;
+  overflow-y: scroll;
+  -webkit-overflow-scrolling: touch;
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
@@ -97,10 +101,15 @@
 
 .bubble {
   max-width: 75%;
-  padding: 10px 14px;
-  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
   animation: fadeIn 200ms ease;
   word-wrap: break-word;
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+  transform: translateZ(0);
 }
 
 .bubble p {
@@ -121,6 +130,7 @@
   background: var(--accent-primary);
   color: #fff;
   border-bottom-right-radius: 4px;
+  box-shadow: var(--glow-primary);
 }
 
 .mine .time {
@@ -132,6 +142,8 @@
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-bottom-left-radius: 4px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .typingBubble {
@@ -183,9 +195,12 @@
 .inputBar {
   display: flex;
   gap: 8px;
-  padding: 12px 20px;
+  padding: 16px 20px;
   border-top: 1px solid var(--border-color);
-  background: var(--bg-secondary);
+  background: var(--bg-surface);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 10;
 }
 
 .input {
@@ -245,6 +260,10 @@
   border: 1px solid var(--border-color);
   flex-shrink: 0;
   cursor: pointer;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .attachBtn:hover:not(:disabled), .micBtn:hover:not(:disabled) {
@@ -261,26 +280,120 @@
   background: var(--accent-red) !important;
   color: #fff !important;
   border-color: var(--accent-red) !important;
-  animation: pulse 1.5s infinite;
+  animation: pulseRed 1.5s infinite;
+  transform: scale(1.15) translateY(-5px); /* Lift up when holding */
 }
 
-@keyframes pulse {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.05); }
-  100% { transform: scale(1); }
+@keyframes pulseRed {
+  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
 }
-
 .attachedImage {
   max-width: 100%;
   border-radius: var(--radius-sm);
   margin-bottom: 4px;
 }
 
-.attachedAudio {
-  width: 100%;
-  max-width: 250px;
-  margin-bottom: 4px;
-  height: 36px;
+/* --- Voice Message Player --- */
+.voicePlayer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 200px;
+}
+
+.playButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  color: white;
+  flex-shrink: 0;
+  box-shadow: var(--shadow-sm);
+}
+
+.playButton:hover {
+  background: var(--accent-primary-hover);
+  transform: scale(1.05);
+  box-shadow: var(--glow-primary);
+}
+
+.voiceWaveform {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+}
+
+.waveBar {
+  width: 4px;
+  height: 16px;
+  background: var(--text-secondary);
+  border-radius: 2px;
+  animation: wavePulse 1s ease-in-out infinite var(--delay, 0s);
+}
+.waveBar:nth-child(1) { --delay: 0s; height: 10px; }
+.waveBar:nth-child(2) { --delay: 0.2s; height: 18px; }
+.waveBar:nth-child(3) { --delay: 0.4s; height: 12px; }
+
+@keyframes wavePulse {
+  0%, 100% {
+    transform: scaleY(0.8);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scaleY(1.2);
+    opacity: 1;
+  }
+}
+
+.voiceText {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-left: 8px;
+}
+
+/* --- WhatsApp Style Recording Overlay --- */
+.recordingOverlay {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  background: rgba(239, 68, 68, 0.1); 
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  padding: 8px 14px;
+  animation: enterOverlay 300ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes enterOverlay {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.recordIndicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background-color: var(--accent-red);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+  animation: blink 1.5s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.2; }
+}
+
+.recordingTime {
+  color: var(--text-primary);
+  font-weight: 500;
+  font-size: 0.95rem;
+  letter-spacing: 1px;
 }
 
 @media (max-width: 640px) {

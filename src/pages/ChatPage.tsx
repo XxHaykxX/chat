@@ -1,13 +1,72 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Send, LogOut, UserPlus, AlertTriangle, Paperclip, Mic } from 'lucide-react';
+import { Send, LogOut, UserPlus, AlertTriangle, Paperclip, Mic, Play, Pause, Copy, Trash2 } from 'lucide-react';
 import type { ChatMessage } from '../types';
 import styles from './ChatPage.module.css';
 
+const AUDIO_PLAY_EVENT = 'custom-audio-play';
+
+// --- Custom Audio Player Component ---
+const VoiceMessagePlayer: React.FC<{ url: string; msgId: string }> = ({ url, msgId }) => {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    const handleOtherPlay = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail !== msgId && audioRef.current) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+      }
+    };
+    window.addEventListener(AUDIO_PLAY_EVENT, handleOtherPlay);
+    
+    return () => {
+      window.removeEventListener(AUDIO_PLAY_EVENT, handleOtherPlay);
+    };
+  }, [msgId]);
+
+  const togglePlay = () => {
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+    } else {
+      audioRef.current.play().catch(console.error);
+      window.dispatchEvent(new CustomEvent(AUDIO_PLAY_EVENT, { detail: msgId }));
+    }
+  };
+
+  return (
+    <div className={styles.voicePlayer}>
+      <audio 
+        ref={audioRef}
+        src={url}
+        onEnded={() => setIsPlaying(false)}
+        onPause={() => setIsPlaying(false)}
+        onPlay={() => setIsPlaying(true)}
+        preload="metadata"
+        style={{ display: 'none' }}
+      />
+      <button onClick={togglePlay} className={styles.playButton} type="button">
+        {isPlaying ? <Pause size={20} /> : <Play size={20} />}
+      </button>
+      <div className={styles.voiceWaveform}>
+        <div className={styles.waveBar} />
+        <div className={styles.waveBar} />
+        <div className={styles.waveBar} />
+        <span className={styles.voiceText}>Голосовое сообщение</span>
+      </div>
+    </div>
+  );
+};
+// -------------------------------------
+
 interface ChatPageProps {
   messages: ChatMessage[];
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   isPartnerTyping: boolean;
+  isPartnerRecording: boolean;
   partnerDisconnected: boolean;
-  onSendMessage: (text?: string, type?: 'text' | 'image' | 'voice', mediaUrl?: string) => void;
+  onSendMessage: (text?: string, type?: 'text' | 'image' | 'voice' | 'video', mediaUrl?: string) => void;
   onTyping: () => void;
   onStopTyping: () => void;
   onDisconnect: () => void;
@@ -16,7 +75,9 @@ interface ChatPageProps {
 
 export default function ChatPage({
   messages,
+  setMessages,
   isPartnerTyping,
+  isPartnerRecording,
   partnerDisconnected,
   onSendMessage,
   onTyping,
@@ -26,15 +87,56 @@ export default function ChatPage({
 }: ChatPageProps) {
   const [inputValue, setInputValue] = useState('');
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number; messageId: string | null; textItem: string | null }>({ visible: false, x: 0, y: 0, messageId: null, textItem: null });
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const isRecordingRef = useRef(false);
+  
+  useEffect(() => {
+    if (isRecording) {
+      document.body.style.userSelect = 'none';
+      document.body.style.webkitUserSelect = 'none';
+      setRecordingTime(0);
+      timerRef.current = setInterval(() => {
+        setRecordingTime((prev) => prev + 1);
+      }, 1000);
+    } else {
+      document.body.style.userSelect = '';
+      document.body.style.webkitUserSelect = '';
+      if (timerRef.current) clearInterval(timerRef.current);
+      setRecordingTime(0);
+    }
+    return () => {
+      document.body.style.userSelect = '';
+      document.body.style.webkitUserSelect = '';
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isRecording]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, isPartnerTyping]);
+  }, [messages, isPartnerTyping, isPartnerRecording]);
+
+  useEffect(() => {
+    const handleGlobalClick = () => {
+      if (contextMenu.visible) setContextMenu((prev) => ({ ...prev, visible: false }));
+    };
+    const handleGlobalScroll = () => {
+      if (contextMenu.visible) setContextMenu((prev) => ({ ...prev, visible: false }));
+    };
+    window.addEventListener('click', handleGlobalClick);
+    window.addEventListener('scroll', handleGlobalScroll, true);
+    return () => {
+      window.removeEventListener('click', handleGlobalClick);
+      window.removeEventListener('scroll', handleGlobalScroll, true);
+    };
+  }, [contextMenu.visible]);
 
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -80,18 +182,22 @@ export default function ChatPage({
       return;
     }
 
+    const isVideo = file.type.startsWith('video/');
     const reader = new FileReader();
     reader.readAsDataURL(file);
     reader.onloadend = () => {
-      const base64Image = reader.result as string;
-      onSendMessage(undefined, 'image', base64Image);
+      const base64Data = reader.result as string;
+      onSendMessage(undefined, isVideo ? 'video' : 'image', base64Data);
     };
 
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const startRecording = async () => {
+    if (isRecordingRef.current || partnerDisconnected) return;
     try {
+      isRecordingRef.current = true;
+      setIsRecording(true);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
@@ -104,7 +210,9 @@ export default function ChatPage({
       };
 
       mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        // Use the actual mimeType recorded by the browser (crucial for iOS Safari which might use mp4)
+        const mimeType = mediaRecorder.mimeType || 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
         const reader = new FileReader();
         reader.readAsDataURL(audioBlob);
         reader.onloadend = () => {
@@ -123,14 +231,68 @@ export default function ChatPage({
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
+    if (!isRecordingRef.current) return;
+    isRecordingRef.current = false;
+    setIsRecording(false);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
-      setIsRecording(false);
     }
+  };
+
+  const openContextMenu = (msg: ChatMessage, clientX: number, clientY: number) => {
+    setContextMenu({
+      visible: true,
+      x: clientX,
+      y: clientY,
+      messageId: msg.id,
+      textItem: msg.text || null,
+    });
+  };
+
+  const handleMessageTouchStart = (msg: ChatMessage, e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => {
+      openContextMenu(msg, touch.clientX, touch.clientY);
+    }, 500); 
+  };
+
+  const handleMessageTouchEnd = () => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+  };
+
+  const handleCopy = () => {
+    if (contextMenu.textItem) {
+      navigator.clipboard.writeText(contextMenu.textItem);
+    }
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+  };
+
+  const handleDelete = () => {
+    if (contextMenu.messageId) {
+      setMessages((prev) => prev.filter((m) => m.id !== contextMenu.messageId));
+    }
+    setContextMenu((prev) => ({ ...prev, visible: false }));
   };
 
   return (
     <div className={styles.page}>
+      {contextMenu.visible && (
+        <div 
+          className={styles.contextMenuOverlay} 
+          style={{ top: contextMenu.y, left: Math.min(contextMenu.x, window.innerWidth - 150) }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {contextMenu.textItem && (
+            <button className={styles.contextMenuItem} onClick={handleCopy}>
+              <Copy size={16} /> Скопировать
+            </button>
+          )}
+          <button className={`${styles.contextMenuItem} ${styles.contextMenuDanger}`} onClick={handleDelete}>
+            <Trash2 size={16} /> Удалить
+          </button>
+        </div>
+      )}
       <header className={styles.header}>
         <div className={styles.headerLeft}>
           <div className={styles.avatar}>А</div>
@@ -139,6 +301,8 @@ export default function ChatPage({
             <div className={styles.partnerStatus}>
               {partnerDisconnected ? (
                 <span className={styles.offline}>Отключился</span>
+              ) : isPartnerRecording ? (
+                <span className={styles.typing}>записывает голосовое...</span>
               ) : isPartnerTyping ? (
                 <span className={styles.typing}>печатает...</span>
               ) : (
@@ -167,13 +331,23 @@ export default function ChatPage({
           <div
             key={msg.id}
             className={`${styles.bubble} ${msg.fromPartner ? styles.partner : styles.mine}`}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              openContextMenu(msg, e.clientX, e.clientY);
+            }}
+            onTouchStart={(e) => handleMessageTouchStart(msg, e)}
+            onTouchEnd={handleMessageTouchEnd}
+            onTouchMove={handleMessageTouchEnd}
           >
             {msg.type === 'text' && <p>{msg.text}</p>}
             {msg.type === 'image' && msg.mediaUrl && (
               <img src={msg.mediaUrl} alt="Attached" className={styles.attachedImage} />
             )}
+            {msg.type === 'video' && msg.mediaUrl && (
+              <video src={msg.mediaUrl} controls playsInline className={styles.attachedImage} />
+            )}
             {msg.type === 'voice' && msg.mediaUrl && (
-              <audio controls src={msg.mediaUrl} className={styles.attachedAudio} />
+              <VoiceMessagePlayer url={msg.mediaUrl} msgId={msg.id} />
             )}
             <span className={styles.time}>
               {new Date(msg.timestamp).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
@@ -202,32 +376,44 @@ export default function ChatPage({
       </main>
 
       <footer className={styles.inputBar}>
-        <button
-          className={styles.attachBtn}
-          onClick={handleAttachClick}
-          disabled={partnerDisconnected}
-          aria-label="Прикрепить фото"
-          title="Прикрепить фото"
-        >
-          <Paperclip size={18} />
-        </button>
-        <input
-          type="file"
-          accept="image/*"
-          ref={fileInputRef}
-          style={{ display: 'none' }}
-          onChange={handleFileChange}
-        />
-        <input
-          type="text"
-          value={inputValue}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          placeholder={isRecording ? 'Идет запись...' : 'Введите сообщение...'}
-          className={styles.input}
-          disabled={partnerDisconnected || isRecording}
-          aria-label="Сообщение"
-        />
+        {isRecording ? (
+          <div className={styles.recordingOverlay}>
+            <div className={styles.recordIndicator} />
+            <span className={styles.recordingTime}>
+              Запись... {Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}
+            </span>
+          </div>
+        ) : (
+          <>
+            <button
+              className={styles.attachBtn}
+              onClick={handleAttachClick}
+              disabled={partnerDisconnected}
+              aria-label="Прикрепить фото"
+              title="Прикрепить фото"
+            >
+              <Paperclip size={18} />
+            </button>
+            <input
+              type="file"
+              accept="image/*,video/*"
+              ref={fileInputRef}
+              style={{ display: 'none' }}
+              onChange={handleFileChange}
+            />
+            <input
+              type="text"
+              value={inputValue}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder="Введите сообщение..."
+              className={styles.input}
+              disabled={partnerDisconnected}
+              aria-label="Сообщение"
+            />
+          </>
+        )}
+
         {inputValue.trim() ? (
           <button
             className={styles.sendBtn}
@@ -240,11 +426,20 @@ export default function ChatPage({
         ) : (
           <button
             className={`${styles.micBtn} ${isRecording ? styles.recording : ''}`}
-            onPointerDown={startRecording}
-            onPointerUp={stopRecording}
+            onPointerDown={(e) => {
+              e.preventDefault();
+              startRecording();
+            }}
+            onPointerUp={(e) => {
+              e.preventDefault();
+              stopRecording();
+            }}
             onPointerLeave={stopRecording}
+            onPointerCancel={stopRecording}
+            onContextMenu={(e) => e.preventDefault()}
             disabled={partnerDisconnected}
             aria-label="Записать голосовое"
+            title="Удерживайте для записи"
           >
             <Mic size={18} />
           </button>
